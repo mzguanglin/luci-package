@@ -12,14 +12,14 @@ PKG_RELEASE:=1
 ifeq ($(USELOCAL),1)
   PKG_VERSION:=0.10+svn
 else
-  PKG_SOURCE_URL:=http://svn.luci.subsignal.org/luci/$(PKG_BRANCH)
+  PKG_SOURCE_URL:=git://222.200.191.34/LuCi.git
   ifeq ($(DUMP),)
-    PKG_REV:=6320
+    PKG_REV:=6321
     PKG_VERSION:=0.10+svn$(PKG_REV)
   endif
   PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
   PKG_SOURCE:=$(PKG_SOURCE_SUBDIR).tar.gz
-  PKG_SOURCE_PROTO:=svn
+  PKG_SOURCE_PROTO:=git
   PKG_SOURCE_VERSION:=$(PKG_REV)
 endif
 
