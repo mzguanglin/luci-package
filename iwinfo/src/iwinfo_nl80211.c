@@ -145,7 +145,9 @@ static struct nl80211_msg_conveyor * nl80211_msg(const char *ifname, int cmd, in
 	if( nl80211_init() < 0 )
 		goto err;
 
-	if( !strncmp(ifname, "radio", 5) )
+	if( !strncmp(ifname, "phy", 3) )
+		phyidx = atoi(&ifname[3]);
+	else if( !strncmp(ifname, "radio", 5) )
 		phyidx = atoi(&ifname[5]);
 	else if( !strncmp(ifname, "mon.", 4) )
 		ifidx = if_nametoindex(&ifname[4]);
@@ -236,12 +238,15 @@ static int nl80211_freq2channel(int freq)
     return (freq / 5) - 1000;
 }
 
-static char * nl80211_getval(const char *buf, const char *key)
+static char * nl80211_getval(const char *ifname, const char *buf, const char *key)
 {
 	int i, len;
 	char lkey[64] = { 0 };
 	const char *ln = buf;
 	static char lval[256] = { 0 };
+
+	int matched_if = ifname ? 0 : 1;
+
 
 	for( i = 0, len = strlen(buf); i < len; i++ )
 	{
@@ -256,12 +261,20 @@ static char * nl80211_getval(const char *buf, const char *key)
 		}
 		else if( buf[i] == '\n' )
 		{
-			if( lkey[0] && !strcmp(lkey, key) )
+			if( lkey[0] )
 			{
 				memcpy(lval, ln + strlen(lkey) + 1,
 					min(sizeof(lval) - 1, &buf[i] - ln - strlen(lkey) - 1));
 
-				return lval;
+				if( (ifname != NULL ) &&
+				    (!strcmp(lkey, "interface") || !strcmp(lkey, "bss")) )
+				{
+					matched_if = !strcmp(lval, ifname);
+				}
+				else if( matched_if && !strcmp(lkey, key) )
+				{
+					return lval;
+				}
 			}
 
 			ln = &buf[i+1];
@@ -320,18 +333,37 @@ static char * nl80211_hostapd_info(const char *ifname)
 	return NULL;
 }
 
-static char * nl80211_wpasupp_info(const char *ifname, const char *cmd)
+static inline int nl80211_wpactl_recv(int sock, char *buf, int blen)
 {
-	int sock = -1, len;
+	fd_set rfds;
+	struct timeval tv = { 2, 0 };
+
+	FD_ZERO(&rfds);
+	FD_SET(sock, &rfds);
+
+	memset(buf, 0, blen);
+
+
+	if( select(sock + 1, &rfds, NULL, NULL, &tv) < 0 )
+		return -1;
+
+	if( !FD_ISSET(sock, &rfds) )
+		return -1;
+
+	return recv(sock, buf, blen, 0);
+}
+
+static char * nl80211_wpactl_info(const char *ifname, const char *cmd,
+								   const char *event)
+{
+	int sock = -1;
 	char *rv = NULL;
 	size_t remote_length, local_length;
-	static char buffer[1024] = { 0 };
+	static char buffer[10240] = { 0 };
 
-	struct timeval tv = { 2, 0 };
 	struct sockaddr_un local = { 0 };
 	struct sockaddr_un remote = { 0 };
 
-	fd_set rfds;
 
 	sock = socket(PF_UNIX, SOCK_DGRAM, 0);
 	if( sock < 0 )
@@ -354,25 +386,26 @@ static char * nl80211_wpasupp_info(const char *ifname, const char *cmd)
 	if( bind(sock, (struct sockaddr *) &local, local_length) )
 		goto out;
 
+
+	send(sock, "ATTACH", 6, 0);
+
+	if( nl80211_wpactl_recv(sock, buffer, sizeof(buffer)) <= 0 )
+		goto out;
+
+
 	send(sock, cmd, strlen(cmd), 0);
 
 	while( 1 )
 	{
-		FD_ZERO(&rfds);
-		FD_SET(sock, &rfds);
+		if( nl80211_wpactl_recv(sock, buffer, sizeof(buffer)) <= 0 )
+		{
+			if( event )
+				continue;
 
-		if( select(sock + 1, &rfds, NULL, NULL, &tv) < 0 )
-			goto out;
-
-		if( !FD_ISSET(sock, &rfds) )
 			break;
+		}
 
-		if( (len = recv(sock, buffer, sizeof(buffer), 0)) <= 0 )
-			goto out;
-
-		buffer[len] = 0;
-
-		if( buffer[0] != '<' )
+		if( (!event && buffer[0] != '<') || strstr(buffer, event) )
 			break;
 	}
 
@@ -380,24 +413,48 @@ static char * nl80211_wpasupp_info(const char *ifname, const char *cmd)
 
 out:
 	close(sock);
-	unlink(local.sun_path);
+
+	if( local.sun_family )
+		unlink(local.sun_path);
+
+	return rv;
+}
+
+static inline int nl80211_readint(const char *path)
+{
+	int fd;
+	int rv = -1;
+	char buffer[16];
+
+	if( (fd = open(path, O_RDONLY)) > -1 )
+	{
+		if( read(fd, buffer, sizeof(buffer)) > 0 )
+			rv = atoi(buffer);
+
+		close(fd);
+	}
 
 	return rv;
 }
 
 static char * nl80211_phy2ifname(const char *ifname)
 {
-	int fd, phyidx = 0;
+	int fd, ifidx = -1, cifidx = -1, phyidx = -1;
 	char buffer[64];
 	static char nif[IFNAMSIZ] = { 0 };
 
 	DIR *d;
 	struct dirent *e;
 
-	if( !strncmp(ifname, "radio", 5) )
-	{
+	if( !ifname )
+		return NULL;
+	else if( !strncmp(ifname, "phy", 3) )
+		phyidx = atoi(&ifname[3]);
+	else if( !strncmp(ifname, "radio", 5) )
 		phyidx = atoi(&ifname[5]);
 
+	if( phyidx > -1 )
+	{
 		if( (d = opendir("/sys/class/net")) != NULL )
 		{
 			while( (e = readdir(d)) != NULL )
@@ -405,19 +462,18 @@ static char * nl80211_phy2ifname(const char *ifname)
 				snprintf(buffer, sizeof(buffer),
 					"/sys/class/net/%s/phy80211/index", e->d_name);
 
-				if( (fd = open(buffer, O_RDONLY)) > 0 )
+				if( nl80211_readint(buffer) == phyidx )
 				{
-					if( (read(fd, buffer, sizeof(buffer)) > 0) &&
-					    (atoi(buffer) == phyidx) )
+					snprintf(buffer, sizeof(buffer),
+						"/sys/class/net/%s/ifindex", e->d_name);
+
+					if( (cifidx = nl80211_readint(buffer)) >= 0 &&
+					    ((ifidx < 0) || (cifidx < ifidx)) )
 					{
+						ifidx = cifidx;
 						strncpy(nif, e->d_name, sizeof(nif));
 					}
-
-					close(fd);
 				}
-
-				if( nif[0] )
-					break;
 			}
 
 			closedir(d);
@@ -427,7 +483,7 @@ static char * nl80211_phy2ifname(const char *ifname)
 	return nif[0] ? nif : NULL;
 }
 
-static char * nl80211_add_tempif(const char *ifname)
+static char * nl80211_ifadd(const char *ifname)
 {
 	int phyidx;
 	char *rv = NULL;
@@ -456,9 +512,9 @@ static char * nl80211_add_tempif(const char *ifname)
 	return rv;
 }
 
-static void nl80211_del_tempif(const char *ifname)
+static void nl80211_ifdel(const char *ifname)
 {
-	struct nl80211_msg_conveyor *req, *res;
+	struct nl80211_msg_conveyor *req;
 
 	req = nl80211_msg(ifname, NL80211_CMD_DEL_INTERFACE, 0);
 	if( req )
@@ -469,6 +525,28 @@ static void nl80211_del_tempif(const char *ifname)
 
 	nla_put_failure:
 		nl80211_free(req);
+	}
+}
+
+static void nl80211_hostapd_hup(const char *ifname)
+{
+	int fd, pid = 0;
+	char buf[32];
+	char *phy = nl80211_ifname2phy(ifname);
+
+	if( phy )
+	{
+		snprintf(buf, sizeof(buf), "/var/run/wifi-%s.pid", phy);
+		if( (fd = open(buf, O_RDONLY)) > 0 )
+		{
+			if( read(fd, buf, sizeof(buf)) > 0 )
+				pid = atoi(buf);
+
+			close(fd);
+		}
+
+		if( pid > 0 )
+			kill(pid, 1);
 	}
 }
 
@@ -507,7 +585,7 @@ int nl80211_get_ssid(const char *ifname, char *buf)
 		return 0;
 	}
 	else if( (ssid = nl80211_hostapd_info(ifname)) &&
-	         (ssid = nl80211_getval(ssid, "ssid")) )
+	         (ssid = nl80211_getval(ifname, ssid, "ssid")) )
 	{
 		memcpy(buf, ssid, strlen(ssid));
 		return 0;
@@ -526,7 +604,7 @@ int nl80211_get_bssid(const char *ifname, char *buf)
 		return 0;
 	}
 	else if( (bssid = nl80211_hostapd_info(ifname)) &&
-	         (bssid = nl80211_getval(bssid, "bssid")) )
+	         (bssid = nl80211_getval(ifname, bssid, "bssid")) )
 	{
 		mac[0] = strtol(&bssid[0],  NULL, 16);
 		mac[1] = strtol(&bssid[3],  NULL, 16);
@@ -546,12 +624,28 @@ int nl80211_get_bssid(const char *ifname, char *buf)
 
 int nl80211_get_channel(const char *ifname, int *buf)
 {
-	return wext_get_channel(ifname, buf);
+	char *first;
+
+	if( !wext_get_channel(ifname, buf) )
+		return 0;
+
+	else if( (first = nl80211_phy2ifname(nl80211_ifname2phy(ifname))) != NULL )
+		return wext_get_channel(first, buf);
+
+	return -1;
 }
 
 int nl80211_get_frequency(const char *ifname, int *buf)
 {
-	return wext_get_frequency(ifname, buf);
+	char *first;
+
+	if( !wext_get_frequency(ifname, buf) )
+		return 0;
+
+	else if( (first = nl80211_phy2ifname(nl80211_ifname2phy(ifname))) != NULL )
+		return wext_get_frequency(first, buf);
+
+	return -1;
 }
 
 int nl80211_get_txpower(const char *ifname, int *buf)
@@ -680,10 +774,11 @@ int nl80211_get_signal(const char *ifname, int *buf)
 	return -1;
 }
 
-int nl80211_get_noise(const char *ifname, int *buf)
+static int nl80211_get_noise_cb(struct nl_msg *msg, void *arg)
 {
-	int rv = -1;
-	struct nl80211_msg_conveyor *req, *res;
+	int8_t *noise = arg;
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	struct nlattr *tb[NL80211_ATTR_MAX + 1];
 	struct nlattr *si[NL80211_SURVEY_INFO_MAX + 1];
 
 	static struct nla_policy sp[NL80211_SURVEY_INFO_MAX + 1] = {
@@ -691,28 +786,48 @@ int nl80211_get_noise(const char *ifname, int *buf)
 		[NL80211_SURVEY_INFO_NOISE]     = { .type = NLA_U8  },
 	};
 
+	nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
+		genlmsg_attrlen(gnlh, 0), NULL);
+
+	if (!tb[NL80211_ATTR_SURVEY_INFO])
+		return NL_SKIP;
+
+	if (nla_parse_nested(si, NL80211_SURVEY_INFO_MAX,
+						 tb[NL80211_ATTR_SURVEY_INFO], sp))
+		return NL_SKIP;
+
+	if (!si[NL80211_SURVEY_INFO_NOISE])
+		return NL_SKIP;
+
+	if (!*noise || si[NL80211_SURVEY_INFO_IN_USE])
+		*noise = (int8_t)nla_get_u8(si[NL80211_SURVEY_INFO_NOISE]);
+
+	return NL_SKIP;
+}
+
+
+int nl80211_get_noise(const char *ifname, int *buf)
+{
+	int8_t noise;
+	struct nl80211_msg_conveyor *req;
+
 	req = nl80211_msg(ifname, NL80211_CMD_GET_SURVEY, NLM_F_DUMP);
-	if( req )
+	if (req)
 	{
-		res = nl80211_send(req);
-		if( res )
-		{
-			if( res->attr[NL80211_ATTR_SURVEY_INFO] )
-			{
-				if( !nla_parse_nested(si, NL80211_SURVEY_INFO_MAX,
-						res->attr[NL80211_ATTR_SURVEY_INFO], sp) &&
-					si[NL80211_SURVEY_INFO_NOISE] )
-				{
-					*buf = (int8_t)nla_get_u8(si[NL80211_SURVEY_INFO_NOISE]);
-					rv = 0;
-				}
-			}
-			nl80211_free(res);
-		}
+		noise = 0;
+
+		nl80211_cb(req, nl80211_get_noise_cb, &noise);
+		nl80211_send(req);
 		nl80211_free(req);
+
+		if (noise)
+		{
+			*buf = noise;
+			return 0;
+		}
 	}
 
-	return rv;
+	return -1;
 }
 
 int nl80211_get_quality(const char *ifname, int *buf)
@@ -768,13 +883,36 @@ int nl80211_get_encryption(const char *ifname, char *buf)
 	struct iwinfo_crypto_entry *c = (struct iwinfo_crypto_entry *)buf;
 
 	/* Hostapd */
-	if( (res = nl80211_hostapd_info(ifname)) &&
-	    nl80211_getval(res, "interface") )
+	if( (res = nl80211_hostapd_info(ifname)) )
 	{
-		if( (val = nl80211_getval(res, "auth_algs")) && (val > 0) )
-		{
+		if( (val = nl80211_getval(ifname, res, "wpa")) != NULL )
+			c->wpa_version = atoi(val);
+
+		val = nl80211_getval(ifname, res, "wpa_key_mgmt");
+
+		if( !val || strstr(val, "PSK") )
+			c->auth_suites |= IWINFO_KMGMT_PSK;
+
+		if( val && strstr(val, "EAP") )
+			c->auth_suites |= IWINFO_KMGMT_8021x;
+
+		if( val && strstr(val, "NONE") )
 			c->auth_suites |= IWINFO_KMGMT_NONE;
 
+		if( (val = nl80211_getval(ifname, res, "wpa_pairwise")) != NULL )
+		{
+			if( strstr(val, "TKIP") )
+				c->pair_ciphers |= IWINFO_CIPHER_TKIP;
+
+			if( strstr(val, "CCMP") )
+				c->pair_ciphers |= IWINFO_CIPHER_CCMP;
+
+			if( strstr(val, "NONE") )
+				c->pair_ciphers |= IWINFO_CIPHER_NONE;
+		}
+
+		if( (val = nl80211_getval(ifname, res, "auth_algs")) != NULL )
+		{
 			switch(atoi(val)) {
 				case 1:
 					c->auth_algs |= IWINFO_AUTH_OPEN;
@@ -797,7 +935,7 @@ int nl80211_get_encryption(const char *ifname, char *buf)
 			{
 				snprintf(k, sizeof(k), "wep_key%d", i);
 
-				if( (val = nl80211_getval(res, k)) )
+				if( (val = nl80211_getval(ifname, res, k)) )
 				{
 					if( (strlen(val) == 5) || (strlen(val) == 10) )
 						c->pair_ciphers |= IWINFO_CIPHER_WEP40;
@@ -806,41 +944,7 @@ int nl80211_get_encryption(const char *ifname, char *buf)
 						c->pair_ciphers |= IWINFO_CIPHER_WEP104;
 				}
 			}
-
-			c->group_ciphers = c->pair_ciphers;
-
-			return 0;
 		}
-
-
-		if( (val = nl80211_getval(res, "wpa")) != NULL )
-			c->wpa_version = atoi(val);
-
-
-		val = nl80211_getval(res, "wpa_key_mgmt");
-
-		if( !val || strstr(val, "PSK") )
-			c->auth_suites |= IWINFO_KMGMT_PSK;
-
-		if( val && strstr(val, "EAP") )
-			c->auth_suites |= IWINFO_KMGMT_8021x;
-
-		if( val && strstr(val, "NONE") )
-			c->auth_suites |= IWINFO_KMGMT_NONE;
-
-
-		if( (val = nl80211_getval(res, "wpa_pairwise")) != NULL )
-		{
-			if( strstr(val, "TKIP") )
-				c->pair_ciphers |= IWINFO_CIPHER_TKIP;
-
-			if( strstr(val, "CCMP") )
-				c->pair_ciphers |= IWINFO_CIPHER_CCMP;
-
-			if( strstr(val, "NONE") )
-				c->pair_ciphers |= IWINFO_CIPHER_NONE;
-		}
-
 
 		c->group_ciphers = c->pair_ciphers;
 		c->enabled = (c->auth_algs || c->auth_suites) ? 1 : 0;
@@ -849,8 +953,8 @@ int nl80211_get_encryption(const char *ifname, char *buf)
 	}
 
 	/* WPA supplicant */
-	else if( (res = nl80211_wpasupp_info(ifname, "STATUS")) &&
-	         (val = nl80211_getval(res, "pairwise_cipher")) )
+	else if( (res = nl80211_wpactl_info(ifname, "STATUS", NULL)) &&
+	         (val = nl80211_getval(NULL, res, "pairwise_cipher")) )
 	{
 		/* WEP */
 		if( strstr(val, "WEP") )
@@ -887,7 +991,7 @@ int nl80211_get_encryption(const char *ifname, char *buf)
 				c->pair_ciphers |= IWINFO_CIPHER_WEP104;
 
 
-			if( (val = nl80211_getval(res, "group_cipher")) )
+			if( (val = nl80211_getval(NULL, res, "group_cipher")) )
 			{
 				if( strstr(val, "TKIP") )
 					c->group_ciphers |= IWINFO_CIPHER_TKIP;
@@ -906,7 +1010,7 @@ int nl80211_get_encryption(const char *ifname, char *buf)
 			}
 
 
-			if( (val = nl80211_getval(res, "key_mgmt")) )
+			if( (val = nl80211_getval(NULL, res, "key_mgmt")) )
 			{
 				if( strstr(val, "WPA2") )
 					c->wpa_version = 2;
@@ -1068,13 +1172,13 @@ int nl80211_get_txpwrlist(const char *ifname, char *buf, int *len)
 		     dbm_cur += 2, dbm_cnt++ )
 		{
 			entry.dbm = dbm_cur;
-			entry.mw  = wext_dbm2mw(dbm_cur);
+			entry.mw  = iwinfo_dbm2mw(dbm_cur);
 
 			memcpy(&buf[dbm_cnt * sizeof(entry)], &entry, sizeof(entry));
 		}
 
 		entry.dbm = dbm_max;
-		entry.mw  = wext_dbm2mw(dbm_max);
+		entry.mw  = iwinfo_dbm2mw(dbm_max);
 
 		memcpy(&buf[dbm_cnt * sizeof(entry)], &entry, sizeof(entry));
 		dbm_cnt++;
@@ -1089,11 +1193,7 @@ int nl80211_get_txpwrlist(const char *ifname, char *buf, int *len)
 static void nl80211_get_scancrypto(const char *spec,
 	struct iwinfo_crypto_entry *c)
 {
-	if( strstr(spec, "OPEN") )
-	{
-		c->enabled = 0;
-	}
-	else
+	if( strstr(spec, "WPA") || strstr(spec, "WEP") )
 	{
 		c->enabled = 1;
 
@@ -1134,13 +1234,16 @@ static void nl80211_get_scancrypto(const char *spec,
 
 		c->group_ciphers = c->pair_ciphers;
 	}
+	else
+	{
+		c->enabled = 0;
+	}
 }
 
 int nl80211_get_scanlist(const char *ifname, char *buf, int *len)
 {
 	int freq, rssi, qmax, count;
 	char *res;
-	char cmd[256];
 	char ssid[128] = { 0 };
 	char bssid[18] = { 0 };
 	char cipher[256] = { 0 };
@@ -1155,10 +1258,10 @@ int nl80211_get_scanlist(const char *ifname, char *buf, int *len)
 		}
 
 		/* Need to spawn a temporary iface for scanning */
-		else if( (res = nl80211_add_tempif(ifname)) != NULL )
+		else if( (res = nl80211_ifadd(ifname)) != NULL )
 		{
 			count = nl80211_get_scanlist(res, buf, len);
-			nl80211_del_tempif(res);
+			nl80211_ifdel(res);
 			return count;
 		}
 	}
@@ -1166,12 +1269,9 @@ int nl80211_get_scanlist(const char *ifname, char *buf, int *len)
 	struct iwinfo_scanlist_entry *e = (struct iwinfo_scanlist_entry *)buf;
 
 	/* WPA supplicant */
-	if( (res = nl80211_wpasupp_info(ifname, "SCAN")) &&
-	    !strcmp(res, "OK\n") )
+	if( (res = nl80211_wpactl_info(ifname, "SCAN", "CTRL-EVENT-SCAN-RESULTS")) )
 	{
-		sleep(2);
-
-		if( (res = nl80211_wpasupp_info(ifname, "SCAN_RESULTS")) )
+		if( (res = nl80211_wpactl_info(ifname, "SCAN_RESULTS", NULL)) )
 		{
 			nl80211_get_quality_max(ifname, &qmax);
 
@@ -1180,7 +1280,7 @@ int nl80211_get_scanlist(const char *ifname, char *buf, int *len)
 
 			count = 0;
 
-			while( sscanf(res, "%17s %d %d %255s %127[^\n]\n",
+			while( sscanf(res, "%17s %d %d %255s%*[ \t]%127[^\n]\n",
 			              bssid, &freq, &rssi, cipher, ssid) > 0 )
 			{
 				/* BSSID */
@@ -1233,6 +1333,10 @@ int nl80211_get_scanlist(const char *ifname, char *buf, int *len)
 
 				count++;
 				e++;
+
+				memset(ssid, 0, sizeof(ssid));
+				memset(bssid, 0, sizeof(bssid));
+				memset(cipher, 0, sizeof(cipher));
 			}
 
 			*len = count * sizeof(struct iwinfo_scanlist_entry);
@@ -1243,57 +1347,47 @@ int nl80211_get_scanlist(const char *ifname, char *buf, int *len)
 	/* AP scan */
 	else
 	{
-		if( (res = nl80211_ifname2phy(ifname)) != NULL )
+		/* Got a temp interface, don't create yet another one */
+		if( !strncmp(ifname, "tmp.", 4) )
 		{
-			/* Got a temp interface, don't create yet another one */
-			if( !strncmp(ifname, "tmp.", 4) )
+			if( !iwinfo_ifup(ifname) )
+				return -1;
+
+			wext_get_scanlist(ifname, buf, len);
+			iwinfo_ifdown(ifname);
+			return 0;
+		}
+
+		/* Spawn a new scan interface */
+		else
+		{
+			if( !(res = nl80211_ifadd(ifname)) )
+				goto out;
+
+			if( !iwinfo_ifmac(res) )
+				goto out;
+
+			/* if we can take the new interface up, the driver supports an
+			 * additional interface and there's no need to tear down the ap */
+			if( iwinfo_ifup(res) )
 			{
-				sprintf(cmd, "ifconfig %s up 2>/dev/null", ifname);
-				if( WEXITSTATUS(system(cmd)) )
-					return -1;
-
-				wext_get_scanlist(ifname, buf, len);
-
-				sprintf(cmd, "ifconfig %s down 2>/dev/null", ifname);
-				(void) WEXITSTATUS(system(cmd));
-
-				return 0;
+				wext_get_scanlist(res, buf, len);
+				iwinfo_ifdown(res);
 			}
 
-			/* Spawn a new scan interface */
-			else
+			/* driver cannot create secondary interface, take down ap
+			 * during scan */
+			else if( iwinfo_ifdown(ifname) && iwinfo_ifup(res) )
 			{
-				sprintf(cmd, "ifconfig %s down 2>/dev/null", ifname);
-				if( WEXITSTATUS(system(cmd)) )
-					goto out;
-
-				sprintf(cmd, "iw phy %s interface add scan.%s "
-					"type station 2>/dev/null", res, ifname);
-				if( WEXITSTATUS(system(cmd)) )
-					goto out;
-
-				sprintf(cmd, "ifconfig scan.%s up 2>/dev/null", ifname);
-				if( WEXITSTATUS(system(cmd)) )
-					goto out;
-
-				sprintf(cmd, "scan.%s", ifname);
-				wext_get_scanlist(cmd, buf, len);
-
-			out:
-				sprintf(cmd, "ifconfig scan.%s down 2>/dev/null", ifname);
-				(void) WEXITSTATUS(system(cmd));
-
-				sprintf(cmd, "iw dev scan.%s del 2>/dev/null", ifname);
-				(void) WEXITSTATUS(system(cmd));
-
-				sprintf(cmd, "ifconfig %s up 2>/dev/null", ifname);
-				(void) WEXITSTATUS(system(cmd));
-
-				sprintf(cmd, "killall -HUP hostapd 2>/dev/null");
-				(void) WEXITSTATUS(system(cmd));
-
-				return 0;
+				wext_get_scanlist(res, buf, len);
+				iwinfo_ifdown(res);
+				iwinfo_ifup(ifname);
+				nl80211_hostapd_hup(ifname);
 			}
+
+		out:
+			nl80211_ifdel(res);
+			return 0;
 		}
 	}
 
@@ -1423,8 +1517,8 @@ int nl80211_get_hwmodelist(const char *ifname, int *buf)
 				if( bands[NL80211_BAND_ATTR_HT_CAPA] )
 					caps = nla_get_u16(bands[NL80211_BAND_ATTR_HT_CAPA]);
 
-				/* Treat HT20/HT40 as 11n */
-				if( caps & (1 << 1) )
+				/* Treat any nonzero capability as 11n */
+				if( caps > 0 )
 					*buf |= IWINFO_80211_N;
 
 				nla_for_each_nested(freq,
@@ -1457,7 +1551,18 @@ int nl80211_get_hwmodelist(const char *ifname, int *buf)
 
 int nl80211_get_mbssid_support(const char *ifname, int *buf)
 {
-	/* We assume that multi bssid is always possible */
-	*buf = 1;
-	return 0;
+	/* Test whether we can create another interface */
+	char *nif = nl80211_ifadd(ifname);
+
+	if( nif )
+	{
+		*buf = (iwinfo_ifmac(nif) && iwinfo_ifup(nif));
+
+		iwinfo_ifdown(nif);
+		nl80211_ifdel(nif);
+
+		return 0;
+	}
+
+	return -1;
 }

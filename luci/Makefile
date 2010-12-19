@@ -9,6 +9,8 @@ endif
 PKG_NAME:=luci
 PKG_RELEASE:=1
 
+PKG_BUILD_PARALLEL:=0
+
 ifeq ($(USELOCAL),1)
   PKG_VERSION:=0.10+svn
 else
@@ -77,7 +79,7 @@ define Package/luci-lib-core
   URL:=http://luci.subsignal.org/
   MAINTAINER:=LuCI Development Team <luci@lists.subsignal.org>
   SUBMENU:=Libraries
-  DEPENDS:=+lua
+  DEPENDS:=+lua +libuci-lua
   TITLE:=LuCI core libraries
 endef
 
@@ -151,10 +153,6 @@ define library
   LUCI_BUILD_PACKAGES += luci-lib-$(1)
 endef
 
-define Package/luci-lib-lucid/extra-install
-	$(call Package/luci/install/template,$(1),libs/lucid-http)
-endef
-
 define Package/luci-lib-web/conffiles
 /etc/config/luci
 endef
@@ -202,11 +200,12 @@ $(eval $(call library,httpclient,HTTP(S) client library,+luci-lib-web +luci-lib-
 $(eval $(call library,ipkg,LuCI IPKG/OPKG call abstraction library))
 $(eval $(call library,json,LuCI JSON library))
 $(eval $(call library,lmo,LuCI LMO I18N library))
-$(eval $(call library,luanet,LuCI luanet library,+libiw))
 $(eval $(call library,lucid,LuCId Full-Stack Webserver,+luci-lib-nixio +luci-lib-web +luci-lib-px5g))
+$(eval $(call library,lucid-http,LuCId HTTP Backend,+luci-lib-lucid))
+$(eval $(call library,lucid-rpc,LuCId RPC Backend,+luci-lib-lucid))
 $(eval $(call library,nixio,NIXIO POSIX library,+PACKAGE_luci-lib-nixio_openssl:libopenssl +PACKAGE_luci-lib-nixio_cyassl:libcyassl))
 $(eval $(call library,px5g,RSA/X.509 Key Generator (required for LuCId SSL support),+luci-lib-nixio))
-$(eval $(call library,sys,LuCI Linux/POSIX system library,+libiwinfo))
+$(eval $(call library,sys,LuCI Linux/POSIX system library))
 $(eval $(call library,web,MVC Webframework,+luci-lib-sys +luci-lib-nixio +luci-lib-core +luci-sgi-cgi +luci-lib-lmo))
 $(eval $(call library,uvl,UVL - UCI Validation Layer,+luci-lib-sys +luci-lib-core))
 
@@ -224,9 +223,9 @@ define Package/luci-mod-freifunk-community
    +luci-lib-web +luci-app-splash \
    +luci-app-ffwizard-leipzig \
    +luci-i18n-german \
-   +PACKAGE_luci-mod-freifunk-community:olsrd-luci +PACKAGE_luci-mod-freifunk-community:olsrd-luci-mod-dyn-gw-plain \
-   +PACKAGE_luci-mod-freifunk-community:olsrd-luci-mod-txtinfo +PACKAGE_luci-mod-freifunk-community:olsrd-luci-mod-nameservice \
-   +PACKAGE_luci-mod-freifunk-community:olsrd-luci-mod-watchdog +PACKAGE_luci-mod-freifunk-community:kmod-tun \
+   +PACKAGE_luci-mod-freifunk-community:olsrd +PACKAGE_luci-mod-freifunk-community:olsrd-mod-dyn-gw-plain \
+   +PACKAGE_luci-mod-freifunk-community:olsrd-mod-txtinfo +PACKAGE_luci-mod-freifunk-community:olsrd-mod-nameservice \
+   +PACKAGE_luci-mod-freifunk-community:olsrd-mod-watchdog +PACKAGE_luci-mod-freifunk-community:kmod-tun \
    +PACKAGE_luci-mod-freifunk-community:ip +PACKAGE_luci-mod-freifunk-community:freifunk-watchdog +luci-app-olsr
 endef
 
@@ -276,7 +275,7 @@ define Package/luci-mod-freifunk/conffiles
 endef
 
 $(eval $(call module,admin-core,Web UI Core module,+luci-lib-web +luci-i18n-english))
-$(eval $(call module,admin-mini,LuCI Essentials - stripped down and user-friendly,+luci-mod-admin-core))
+$(eval $(call module,admin-mini,LuCI Essentials - stripped down and user-friendly,+luci-mod-admin-core @BROKEN))
 $(eval $(call module,admin-full,LuCI Administration - full-featured for full control,+luci-mod-admin-core +luci-lib-ipkg))
 $(eval $(call module,rpc,LuCI RPC - JSON-RPC API,+luci-lib-json))
 $(eval $(call module,freifunk,LuCI Freifunk module,+luci-mod-admin-full +luci-lib-json +PACKAGE_luci-mod-freifunk:freifunk-firewall))
@@ -309,6 +308,7 @@ endef
 
 define Package/luci-app-splash/conffiles
 /etc/config/luci_splash
+/usr/lib/luci-splash/splashtext.html
 endef
 
 define Package/luci-app-statistics/conffiles
@@ -329,7 +329,10 @@ $(eval $(call application,firewall,Firmware and Portforwarding application,\
 	+PACKAGE_luci-app-firewall:firewall))
 
 $(eval $(call application,olsr,OLSR configuration and status module,\
-	+luci-mod-admin-full +PACKAGE_luci-app-olsr:olsrd-luci +PACKAGE_luci-app-olsr:olsrd-luci-mod-txtinfo))
+	+luci-mod-admin-full +PACKAGE_luci-app-olsr:olsrd +PACKAGE_luci-app-olsr:olsrd-mod-txtinfo))
+
+$(eval $(call application,olsr-viz,OLSR Visualisation,\
+	+PACKAGE_luci-app-olsr-viz:luci-app-olsr +PACKAGE_luci-app-olsr-viz:olsrd-mod-txtinfo))
 
 $(eval $(call application,qos,Quality of Service configuration module,\
 	+PACKAGE_luci-app-qos:qos-scripts))
@@ -361,9 +364,8 @@ $(eval $(call application,diag-devinfo,LuCI Diagnostics Tools (Device Info),\
 
 $(eval $(call application,voice-core,LuCI Voice Software (Core)))
 
-$(eval $(call application,voide-diag,LuCI Voice Software (Diagnostics),\
+$(eval $(call application,voice-diag,LuCI Voice Software (Diagnostics),\
 	+luci-app-voice-core +luci-app-diag-devinfo))
-
 
 $(eval $(call application,upnp,Universal Plug & Play configuration module,\
 	+PACKAGE_luci-app-upnp:miniupnpd))
@@ -395,12 +397,6 @@ $(eval $(call application,tinyproxy,Tinyproxy - HTTP(S)-Proxy configuration,\
 $(eval $(call application,initmgr,LuCI Initscript Management,\
 	+luci-mod-admin-full))
 
-$(eval $(call application,livestats,LuCI Realtime Statistics,\
-	+luci-mod-rpc))
-
-$(eval $(call application,asterisk,LuCI Support for Asterisk PBX,\
-	@BROKEN +PACKAGE_luci-app-asterisk:asterisk14-xip-core))
-
 $(eval $(call application,polipo,LuCI Support for the Polipo Proxy,\
 	+PACKAGE_luci-app-polipo:polipo))
 
@@ -420,6 +416,10 @@ $(eval $(call application,vnstat,LuCI Support for VnStat,\
 	+PACKAGE_luci-app-vnstat:vnstat \
     +PACKAGE_luci-app-vnstat:vnstati))
 
+$(eval $(call application,radvd,LuCI Support for Radvd,\
+	+luci-mod-admin-full +PACKAGE_luci-app-radvd:radvd))
+
+$(eval $(call application,lqtapifoss,Lantiq voip))
 
 ### Server Gateway Interfaces ###
 define sgi
@@ -459,8 +459,8 @@ define theme
     SUBMENU:=Themes
     TITLE:=$(if $(2),$(2),LuCI $(1) theme)
 	MAINTAINER:=$(if $(3),$(3),LuCI Development Team <luci@lists.subsignal.org>)
-	DEPENDS:=$(ifneq $(1),base,+luci-theme-base) $(4)
-	$(if $(5),DEFAULT:=y if PACKAGE_luci-lib-core)
+	DEPENDS:=$(if $(filter-out base,$(1)),+luci-theme-base) $(4)
+	$(if $(5),DEFAULT:=PACKAGE_luci-lib-core)
   endef
 
   define Package/luci-theme-$(1)/install
@@ -476,7 +476,6 @@ endef
 
 $(eval $(call theme,base,Common base for all themes,,+luci-lib-web))
 $(eval $(call theme,openwrt,OpenWrt.org (default),,,1))
-$(eval $(call theme,openwrtlight,OpenWrt.org - light variant without images))
 $(eval $(call theme,fledermaus,Fledermaus Theme))
 
 $(eval $(call theme,freifunk,alternative Freifunk Theme,\
@@ -488,6 +487,8 @@ $(eval $(call theme,freifunk-bno,Freifunk Berlin Nordost Theme,\
 $(eval $(call theme,freifunk-hannover,Freifunk Hannover Theme,\
 	Mikolas Bingemer <mickey-at-freifunk-hannover-dot-de>))
 
+$(eval $(call theme,freifunk-generic,Freifunk Generic Theme,\
+        Manuel Munz <freifunk-at-somakoma-dot-de>))
 
 ### Translations ###
 define translation
@@ -550,23 +551,19 @@ endef
 
 $(eval $(call collection,,\
 	Standard OpenWrt set including full and mini admin and the standard theme,\
-	+uhttpd +luci-mod-admin-full +luci-mod-admin-mini +luci-theme-openwrt \
-    +luci-app-firewall +luci-app-initmgr))
+	+uhttpd +luci-mod-admin-full +luci-theme-openwrt +luci-app-firewall \
+	+luci-app-initmgr +libiwinfo))
 
 $(eval $(call collection,ssl,\
 	Standard OpenWrt set with HTTPS support,\
-	+uhttpd +uhttpd-mod-tls +px5g +luci-mod-admin-full +luci-mod-admin-mini \
-    +luci-theme-openwrt +luci-app-firewall +luci-app-initmgr))
-
-$(eval $(call collection,medium,\
-	Medium package set using only admin full and a theme without graphics,\
-	+uhttpd +luci-mod-admin-full +luci-theme-openwrtlight))
+	+uhttpd +uhttpd-mod-tls +px5g +luci-mod-admin-full +luci-theme-openwrt \
+	+luci-app-firewall +luci-app-initmgr +libiwinfo))
 
 $(eval $(call collection,light,\
-	Minimum package set using only admin mini and a theme without graphics,\
-	+uhttpd +luci-mod-admin-mini +luci-theme-openwrtlight))
+	Minimum package set using only admin mini and the standard theme,\
+	+uhttpd +luci-mod-admin-mini +luci-theme-openwrt @BROKEN))
 
 
 ### Compile ###
-PKG_CONFIG_DEPENDS := $(patsubst %,CONFIG_PACKAGE_%,$(LUCI_BUILD_PACKAGES))
+PKG_CONFIG_DEPENDS=$(patsubst %,CONFIG_PACKAGE_%,$(LUCI_BUILD_PACKAGES))
 $(foreach b,$(LUCI_BUILD_PACKAGES),$(eval $(call BuildPackage,$(b))))

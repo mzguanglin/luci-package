@@ -7,7 +7,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=libiwinfo
-PKG_RELEASE:=7
+PKG_RELEASE:=13
 
 PKG_BUILD_DIR := $(BUILD_DIR)/$(PKG_NAME)
 
@@ -20,6 +20,7 @@ define Package/libiwinfo
   SUBMENU:=Libraries
   TITLE:=Generalized Wireless Information Library (iwinfo)
   DEPENDS:=+PACKAGE_kmod-mac80211:libnl-tiny +liblua +lua
+  DEFAULT:=PACKAGE_luci-lib-sys
 endef
 
 define Package/libiwinfo/description
@@ -41,8 +42,8 @@ IWINFO_BACKENDS := \
 	$(if $(CONFIG_PACKAGE_kmod-mac80211),nl80211)
 
 TARGET_CFLAGS += \
-	-I$(STAGING_DIR)/usr/include \
-	-I$(STAGING_DIR)/usr/include/libnl-tiny
+	-I$(STAGING_DIR)/usr/include/libnl-tiny \
+	-I$(STAGING_DIR)/usr/include
 
 MAKE_FLAGS += \
 	FPIC="$(FPIC)" \
