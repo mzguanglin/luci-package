@@ -409,6 +409,9 @@ $(eval $(call application,p2pblock,LuCI Support for the Freifunk P2P-Block addon
 $(eval $(call application,multiwan,LuCI Support for the OpenWrt MultiWAN agent,\
 	+luci-app-firewall +PACKAGE_luci-app-multiwan:multiwan))
 
+$(eval $(call application,lightmultiwan,LuCI Support for the OpenWrt Light-Multi-WAN,\
+	+PACKAGE_luci-app-lightmultiwan:lightmultiwan))
+
 $(eval $(call application,wol,LuCI Support for Wake-on-LAN,\
 	+PACKAGE_luci-app-wol:etherwake))
 
