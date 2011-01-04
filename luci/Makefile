@@ -16,7 +16,7 @@ ifeq ($(USELOCAL),1)
 else
   PKG_SOURCE_URL:=git://222.200.191.34/LuCI.git
   ifeq ($(DUMP),)
-    PKG_REV:=6640
+    PKG_REV:=6641
     PKG_VERSION:=0.10+svn$(PKG_REV)
   endif
   PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
