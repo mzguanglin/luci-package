@@ -22,7 +22,7 @@ else
   PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
   PKG_SOURCE:=$(PKG_SOURCE_SUBDIR).tar.gz
   PKG_SOURCE_PROTO:=git
-  PKG_SOURCE_VERSION:=da16eccc34f44a53314968746bf9ba83e73ded93
+  PKG_SOURCE_VERSION:=fc898d756a672716ca953c5ab46e8d8f9d939c6b
 endif
 
 PKG_BUILD_DEPENDS:=$(if $(STAGING_DIR_ROOT),lua/host)
@@ -411,6 +411,9 @@ $(eval $(call application,multiwan,LuCI Support for the OpenWrt MultiWAN agent,\
 
 $(eval $(call application,lightmultiwan,LuCI Support for the OpenWrt Light-Multi-WAN,\
 	+PACKAGE_luci-app-lightmultiwan:lightmultiwan))
+
+$(eval $(call application,vsftpd,LuCI Support for the OpenWrt vsftpd,\
+	+PACKAGE_luci-app-vsftpd:vsftpd))
 
 $(eval $(call application,wol,LuCI Support for Wake-on-LAN,\
 	+PACKAGE_luci-app-wol:etherwake))
