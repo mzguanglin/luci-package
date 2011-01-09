@@ -16,13 +16,13 @@ ifeq ($(USELOCAL),1)
 else
   PKG_SOURCE_URL:=git://222.200.191.34/LuCI.git
   ifeq ($(DUMP),)
-    PKG_REV:=6641
+    PKG_REV:=6642
     PKG_VERSION:=0.10+svn$(PKG_REV)
   endif
   PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
   PKG_SOURCE:=$(PKG_SOURCE_SUBDIR).tar.gz
   PKG_SOURCE_PROTO:=git
-  PKG_SOURCE_VERSION:=e454b294cfcf324ccf44c39436766cf8f7988be7
+  PKG_SOURCE_VERSION:=ffcd2f211fbc3c61883e7c0bbc7c80e3fffaee75
 endif
 
 PKG_BUILD_DEPENDS:=$(if $(STAGING_DIR_ROOT),lua/host)
@@ -280,6 +280,7 @@ $(eval $(call module,admin-full,LuCI Administration - full-featured for full con
 $(eval $(call module,rpc,LuCI RPC - JSON-RPC API,+luci-lib-json))
 $(eval $(call module,freifunk,LuCI Freifunk module,+luci-mod-admin-full +luci-lib-json +PACKAGE_luci-mod-freifunk:freifunk-firewall))
 $(eval $(call module,niu,NIU - Next Generation Interface,+luci-mod-admin-core @BROKEN))
+$(eval $(call module,wizard,LuCI Configuration Wizard - friendly configuration,+luci-mod-admin-core +luci-lib-ipkg))
 
 
 ### Applications ###
