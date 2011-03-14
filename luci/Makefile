@@ -14,7 +14,7 @@ PKG_BUILD_PARALLEL:=0
 ifeq ($(USELOCAL),1)
   PKG_VERSION:=0.10+svn
 else
-  PKG_SOURCE_URL:=git://222.200.191.34/LuCI.git
+  PKG_SOURCE_URL:=git://github.com/mzguanglin/LuCI.git
   ifeq ($(DUMP),)
     PKG_REV:=6643
     PKG_VERSION:=0.10+svn$(PKG_REV)
